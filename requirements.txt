@@ -1,0 +1,15 @@
+# GessoBot — Dependências do projeto
+# Python 3.10+
+
+# Telegram Bot API
+python-telegram-bot>=21.0
+
+# Google Gemini (IA)
+google-generativeai>=0.8.0
+
+# Google Sheets API
+gspread>=6.0.0
+google-auth>=2.0.0
+
+# Variáveis de ambiente (.env)
+python-dotenv>=1.0.0
