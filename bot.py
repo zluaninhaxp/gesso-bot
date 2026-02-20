@@ -3,94 +3,210 @@ import html
 import logging
 import os
 import tempfile
+import json
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters, CommandHandler
 import google.generativeai as genai
 
+# =============================
 # 1. Configurações Iniciais
+# =============================
+
 load_dotenv()
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 AUTHORIZED_USER_ID = os.getenv("AUTHORIZED_USER_ID")
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-# 2. Configurar Gemini (Versão 2026 - Gemini 2.5 Flash)
+# =============================
+# 2. Configurar Gemini
+# =============================
+
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Definimos o modelo que sua conta validou como ativo
 MODEL_NAME = "models/gemini-2.5-flash"
 model = genai.GenerativeModel(model_name=MODEL_NAME)
 
+# =============================
+# 3. Segurança
+# =============================
+
 def is_authorized(user_id: int) -> bool:
-    """Trava de segurança para o seu ID do Telegram."""
     return str(user_id) == str(AUTHORIZED_USER_ID)
 
+# =============================
+# 4. Comando /start
+# =============================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando inicial do bot."""
     if is_authorized(update.effective_user.id):
-        await update.message.reply_text("👷 GessoBot Online! Pode mandar os dados da obra.")
+        await update.message.reply_text("👷 GessoBot Online! Pode mandar os dados.")
     else:
         await update.message.reply_text("⛔ Acesso não autorizado.")
 
+# =============================
+# 5. Prompt Inteligente
+# =============================
+
+def build_prompt(user_message: str) -> str:
+    return f"""
+Você é um assistente de gestão para um gesseiro.
+
+Classifique a mensagem abaixo em UM dos seguintes tipos: orcamento_agendado, receita, despesa.
+
+Responda APENAS em JSON válido. Não escreva nada fora do JSON. Não adicione comentários ou prefixos.
+
+FORMATOS:
+
+Se for orcamento_agendado:
+{{
+  "tipo": "orcamento_agendado",
+  "dados": {{
+    "cliente": "",
+    "data": "",
+    "local": ""
+  }}
+}}
+
+Se for receita:
+{{
+  "tipo": "receita",
+  "dados": {{
+    "cliente": "",
+    "servico": "",
+    "valor": "",
+    "status": "pago ou pendente"
+  }}
+}}
+
+Se for despesa:
+{{
+  "tipo": "despesa",
+  "dados": {{
+    "descricao": "",
+    "valor": "",
+    "pago_para": ""
+  }}
+}}
+
+Mensagem: "{user_message}"
+"""
+
+# =============================
+# 6. Processamento IA
+# =============================
+
 async def process_content(update: Update, content_type: str, file_path: Path = None):
-    """Envia o conteúdo (texto ou áudio) para a IA e retorna o resumo."""
-    # Este prompt prepara o terreno para a futura integração com planilhas
-    prompt = (
-        "Você é um assistente de gestão para gesseiros. "
-        "Extraia os dados da mensagem e responda EXATAMENTE neste formato:\n"
-        "Cliente: [Nome]\n"
-        "Serviço: [O que foi feito]\n"
-        "Valor: [R$]\n"
-        "Status: [Pago/Pendente/Orçamento]"
-    )
-    
     try:
+        # ---------------------------
+        # 1️⃣ Pegar texto do usuário
+        # ---------------------------
         if content_type == "voice":
-            # O Gemini 2.5 'ouve' o arquivo diretamente
+            # Upload do áudio
             audio_file = genai.upload_file(path=str(file_path), mime_type="audio/ogg")
-            response = model.generate_content([prompt, audio_file])
+            # Transcrição
+            transcription_response = model.generate_content([
+                "Transcreva este áudio em português.",
+                audio_file
+            ])
+            user_text = getattr(transcription_response, "text", None)
+            if not user_text:
+                user_text = transcription_response.candidates[0].content
         else:
-            response = model.generate_content(f"{prompt}\n\nMensagem: {update.message.text}")
-        
-        await update.message.reply_text(f"<b>Resumo da Obra:</b>\n\n{html.escape(response.text)}", parse_mode="HTML")
+            user_text = update.message.text
+
+        # ---------------------------
+        # 2️⃣ Criar prompt e gerar JSON
+        # ---------------------------
+        prompt = build_prompt(user_text)
+        response = model.generate_content(prompt)
+
+        # Captura do texto da resposta corretamente
+        response_text = getattr(response, "text", None)
+        if not response_text:
+            response_text = response.candidates[0].content
+
+        # ---------------------------
+        # 3️⃣ Extrair JSON mesmo com lixo extra
+        # ---------------------------
+        match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if not match:
+            raise ValueError("Não foi possível extrair JSON da resposta da IA.")
+
+        json_text = match.group(0)
+        data = json.loads(json_text)
+
+        tipo = data.get("tipo")
+        dados = data.get("dados")
+
+        # ---------------------------
+        # 4️⃣ Enviar confirmação pro usuário
+        # ---------------------------
+        mensagem_confirmacao = (
+            f"✅ Tipo identificado: {tipo}\n\n"
+            f"{json.dumps(dados, indent=2, ensure_ascii=False)}"
+        )
+        await update.message.reply_text(mensagem_confirmacao)
+
+        # ---------------------------
+        # 5️⃣ Aqui você pode salvar no Google Sheets
+        # salvar_no_sheets(tipo, dados)
+        # ---------------------------
+
+    except json.JSONDecodeError:
+        logger.error("Erro ao converter JSON da IA.")
+        await update.message.reply_text("⚠️ A IA não retornou JSON válido. Tente novamente.")
+
     except Exception as e:
-        logger.error(f"Erro na IA: {e}")
+        logger.error(f"Erro geral: {e}")
         await update.message.reply_text(f"❌ Erro ao processar: {str(e)}")
 
+# =============================
+# 7. Handlers
+# =============================
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lida com mensagens de texto."""
     if is_authorized(update.effective_user.id):
         await update.message.reply_text("⏳ Analisando texto...")
         await process_content(update, "text")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lida com áudios (Voice Notes)."""
-    if not is_authorized(update.effective_user.id): return
-    
+    if not is_authorized(update.effective_user.id):
+        return
+
     await update.message.reply_text("⏳ Ouvindo áudio...")
     voice = update.message.voice
     tg_file = await context.bot.get_file(voice.file_id)
-    
+
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
         tmp_path = Path(tmp.name)
         await tg_file.download_to_drive(custom_path=tmp_path)
         try:
             await process_content(update, "voice", tmp_path)
         finally:
-            if tmp_path.exists(): tmp_path.unlink()
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+# =============================
+# 8. Inicialização
+# =============================
 
 def main():
-    """Inicia o bot."""
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    
+
     logger.info(f"Bot iniciado com o modelo {MODEL_NAME}")
     app.run_polling()
 
