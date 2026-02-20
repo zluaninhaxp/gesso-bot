@@ -1,8 +1,11 @@
 import re
 
 def extract_valor(frase):
-    match = re.search(r'(\d+[.,]?\d*)', frase)
-    return match.group(1) if match else ""
+    match = re.search(
+        r'\b\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?\b',
+        frase
+    )
+    return match.group(0) if match else ""
 
 def extract_nome(frase):
     match = re.search(
