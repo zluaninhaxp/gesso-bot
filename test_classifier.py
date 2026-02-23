@@ -1,142 +1,198 @@
 """
-Testes do classificador financeiro com sistema de tags.
+test_classifier.py
+==================
+Testes do classificador financeiro — duas camadas (regex + Gemini fallback).
 Execute: python test_classifier.py
 """
 
-from core.classifier import classify_text
+from core.classifier import classify_text, split_intencoes
 import json
 
+# ================================================================
+# CASOS DE TESTE
+# ================================================================
+
 exemplos = [
-    # ---- RECEITAS ----
-    {"nome": "Receita simples com cliente",
-     "texto": "Quinta recebi 2.500 da Ana."},
-    {"nome": "Receita pelo serviço",
-     "texto": "Segunda recebi 5000 do Carlos pelo serviço."},
-    {"nome": "Receita via transferência",
+
+    # ── RECEITAS ─────────────────────────────────────────────────
+    {"grupo": "RECEITA", "nome": "Formal com cliente",
+     "texto": "Quinta recebi 2.500 da Ana pelo serviço."},
+
+    {"grupo": "RECEITA", "nome": "Com transferência",
      "texto": "O João me transferiu 1200 na terça."},
-    {"nome": "Receita sem cliente",
-     "texto": "Recebi 3000 hoje."},
 
-    # ---- DESPESA DE SERVIÇO: funcionario ----
-    {"nome": "DS – funcionario (ajudante)",
+    {"grupo": "RECEITA", "nome": "Informal — caiu no pix",
+     "texto": "Caiu no pix 800 do Carlos."},
+
+    {"grupo": "RECEITA", "nome": "Informal — me pagaram",
+     "texto": "Me pagaram 3000 hoje, tava esperando isso."},
+
+    {"grupo": "RECEITA", "nome": "Gíria — caiu grana",
+     "texto": "Caiu grana do serviço, 1500."},
+
+    {"grupo": "RECEITA", "nome": "Informal — acertamos",
+     "texto": "Acertamos com o cliente ontem, recebi 4000."},
+
+    # ── DESPESA SERVIÇO — funcionario ────────────────────────────
+    {"grupo": "DS-FUNCIONARIO", "nome": "Ajudante formal",
      "texto": "Paguei o ajudante 300 hoje."},
-    {"nome": "DS – funcionario (diária com nome)",
+
+    {"grupo": "DS-FUNCIONARIO", "nome": "Gíria — rapaziada",
+     "texto": "Paguei a rapaziada da obra, foram 600 reais."},
+
+    {"grupo": "DS-FUNCIONARIO", "nome": "Diária com nome",
      "texto": "Paguei diária do Marcos, 200 reais."},
-    {"nome": "DS – funcionario (mão de obra)",
-     "texto": "Gastei 800 com mão de obra nessa semana."},
 
-    # ---- DESPESA DE SERVIÇO: material ----
-    {"nome": "DS – material (tinta)",
+    {"grupo": "DS-FUNCIONARIO", "nome": "Mão de obra genérica",
+     "texto": "Gastei 800 com mão de obra essa semana."},
+
+    # ── DESPESA SERVIÇO — material ───────────────────────────────
+    {"grupo": "DS-MATERIAL", "nome": "Tinta",
      "texto": "Comprei tinta por 250 reais."},
-    {"nome": "DS – material (gesso + areia)",
-     "texto": "Gastei 180 com gesso e areia."},
-    {"nome": "DS – material (genérico)",
-     "texto": "Sexta comprei material por 780."},
 
-    # ---- DESPESA DE SERVIÇO: ferramenta ----
-    {"nome": "DS – ferramenta",
-     "texto": "Aluguei uma betoneira por 150 para a obra."},
-    {"nome": "DS – ferramenta (equipamento)",
-     "texto": "Comprei equipamentos para o serviço, gastei 600."},
+    {"grupo": "DS-MATERIAL", "nome": "Múltiplos materiais",
+     "texto": "Gastei 180 com gesso e areia para a obra."},
 
-    # ---- DESPESA DE SERVIÇO: transporte ----
-    {"nome": "DS – transporte (gasolina)",
+    {"grupo": "DS-MATERIAL", "nome": "Material genérico",
+     "texto": "Sexta comprei material para o serviço por 780."},
+
+    # ── DESPESA SERVIÇO — transporte ─────────────────────────────
+    {"grupo": "DS-TRANSPORTE", "nome": "Gasolina formal",
      "texto": "Coloquei gasolina por 150 reais para ir à obra."},
-    {"nome": "DS – transporte (frete)",
+
+    {"grupo": "DS-TRANSPORTE", "nome": "Gíria — abasteci",
+     "texto": "Abasteci o carro hoje, gastei 120."},
+
+    {"grupo": "DS-TRANSPORTE", "nome": "Frete",
      "texto": "Paguei 200 de frete para entrega do material."},
-    {"nome": "DS – transporte (pedágio)",
-     "texto": "Gastei 45 em pedágio essa semana."},
 
-    # ---- DESPESA DE SERVIÇO: imposto ----
-    {"nome": "DS – imposto",
-     "texto": "Paguei o DAS do Simples Nacional, 380 reais."},
+    # ── DESPESA PESSOAL — alimentacao ───────────────────────────
+    {"grupo": "DP-ALIMENTACAO", "nome": "Mercado simples",
+     "texto": "Fui no mercado e gastei 700 reais."},
 
-    # ---- DESPESA PESSOAL: alimentacao ----
-    {"nome": "DP – alimentacao (mercado)",
-     "texto": "Fui no supermercado e gastei 350."},
-    {"nome": "DP – alimentacao (restaurante)",
-     "texto": "Gastei 90 no restaurante ontem."},
-    {"nome": "DP – alimentacao (delivery)",
-     "texto": "Pedi delivery, custou 65."},
+    {"grupo": "DP-ALIMENTACAO", "nome": "Mercado + comida (sem vírgula)",
+     "texto": "Fui no mercado e gastei 700 reais e pedi comida por 17"},
 
-    # ---- DESPESA PESSOAL: moradia ----
-    {"nome": "DP – moradia (aluguel)",
+    {"grupo": "DP-ALIMENTACAO", "nome": "Rancho do mês",
+     "texto": "Fiz o rancho do mês, saiu 450."},
+
+    {"grupo": "DP-ALIMENTACAO", "nome": "Restaurante gíria",
+     "texto": "Almoçamos fora hoje, foi 85 reais."},
+
+    # ── DESPESA PESSOAL — moradia ───────────────────────────────
+    {"grupo": "DP-MORADIA", "nome": "Aluguel",
      "texto": "Paguei aluguel da casa, 1200 reais."},
-    {"nome": "DP – moradia (conta de luz)",
+
+    {"grupo": "DP-MORADIA", "nome": "Conta de luz",
      "texto": "Paguei conta de luz, 180 reais."},
 
-    # ---- DESPESA PESSOAL: saude ----
-    {"nome": "DP – saude (farmácia)",
+    # ── DESPESA PESSOAL — saude ─────────────────────────────────
+    {"grupo": "DP-SAUDE", "nome": "Farmácia",
      "texto": "Comprei remédio na farmácia, gastei 75."},
-    {"nome": "DP – saude (médico)",
+
+    {"grupo": "DP-SAUDE", "nome": "Médico",
      "texto": "Paguei a consulta do médico, 250 reais."},
 
-    # ---- DESPESA PESSOAL: lazer ----
-    {"nome": "DP – lazer",
-     "texto": "Paguei a academia esse mês, 120 reais."},
+    # ── SEM PONTUAÇÃO ────────────────────────────────────────────
+    {"grupo": "SEM-PONTUACAO", "nome": "Dois eventos sem vírgula",
+     "texto": "recebi 1500 do João comprei tinta 200"},
 
-    # ---- DESPESA PESSOAL: internet ----
-    {"nome": "DP – internet/telefone",
-     "texto": "Paguei o plano do celular, 55 reais."},
+    {"grupo": "SEM-PONTUACAO", "nome": "Três eventos sem nada",
+     "texto": "recebi 3000 do Carlos paguei ajudante 400 coloquei gasolina 100"},
 
-    # ---- CASOS MISTOS ----
-    {"nome": "Receita + Despesa Serviço",
+    {"grupo": "SEM-PONTUACAO", "nome": "Texto corrido informal",
+     "texto": "hoje caiu 2000 no pix do cliente aí fui no mercado gastei 300 e paguei a conta de luz 150"},
+
+    # ── LINGUAGEM MUITO INFORMAL ──────────────────────────────────
+    {"grupo": "INFORMAL", "nome": "Caiu no pix + mercado",
+     "texto": "Caiu 1800 no pix e fui no supermercado gastei uns 200"},
+
+    {"grupo": "INFORMAL", "nome": "Gíria múltipla",
+     "texto": "Me pagaram 2500 hoje aí botei gasolina 130 e paguei a rapaziada 500"},
+
+    {"grupo": "INFORMAL", "nome": "Expressão de gasto",
+     "texto": "Desembolsei 800 com material da obra essa semana"},
+
+    # ── CASOS MISTOS ─────────────────────────────────────────────
+    {"grupo": "MISTO", "nome": "Receita + material",
      "texto": "Recebi 3000 da Ana, mas comprei tinta por 300."},
-    {"nome": "Múltiplos gastos de serviço",
+
+    {"grupo": "MISTO", "nome": "Três tipos diferentes",
      "texto": "Paguei o ajudante 250, comprei tinta por 180 e coloquei gasolina por 90."},
-    {"nome": "Semana completa",
+
+    {"grupo": "MISTO", "nome": "Semana completa",
      "texto": (
-         "Segunda recebi 4000 da empresa ABC pelo serviço. "
+         "Segunda recebi 4000 da empresa ABC. "
          "Terça comprei material por 1200. "
          "Quarta paguei o ajudante João 300. "
-         "Quinta coloquei gasolina por 120. "
+         "Quinta abasteci por 120. "
          "Sexta paguei conta de luz da minha casa, 180 reais."
      )},
 
-    # ---- EDGE CASES ----
-    {"nome": "Despesa sem categoria clara",
+    # ── EDGE CASES ───────────────────────────────────────────────
+    {"grupo": "EDGE", "nome": "Sem categoria (vai pro Gemini)",
      "texto": "Paguei 500 hoje."},
-    {"nome": "Frase não financeira",
+
+    {"grupo": "EDGE", "nome": "Não financeiro",
      "texto": "Preciso terminar o serviço do Carlos amanhã."},
 ]
 
 
-def testar_exemplo(nome, texto):
-    print(f"\n{'=' * 65}")
-    print(f"TESTE: {nome}")
-    print('=' * 65)
-    print(f"Texto: {texto}\n")
+# ================================================================
+# RUNNER
+# ================================================================
+
+def testar(nome, texto, grupo=""):
+    print(f"\n{'─' * 60}")
+    print(f"[{grupo}] {nome}")
+    print(f"Texto: {texto}")
+    print()
 
     eventos = classify_text(texto)
-    print(f"✅ {len(eventos)} evento(s)\n")
-
-    for i, evento in enumerate(eventos, 1):
-        print(f"  📌 [{i}] {evento['tipo']}")
-        print(f"  {json.dumps(evento['dados'], ensure_ascii=False, indent=4)}")
-        print()
+    for i, ev in enumerate(eventos, 1):
+        d = ev["dados"]
+        fonte = " [gemini]" if d.get("fonte") == "gemini" else ""
+        tags = ", ".join(d.get("tags", [])) or "—"
+        valor = d.get("valor") or "—"
+        cliente = d.get("cliente") or "—"
+        aviso = f" ⚠ {d['aviso']}" if d.get("aviso") else ""
+        print(f"  [{i}] {ev['tipo']}{fonte}")
+        print(f"       valor={valor}  tags={tags}  cliente={cliente}{aviso}")
 
     return eventos
 
 
 def main():
-    print("\n" + "=" * 65)
-    print("🧪 TESTE DO CLASSIFICADOR FINANCEIRO (com tags)")
-    print("=" * 65)
+    print("\n" + "=" * 60)
+    print("🧪 TESTE DO CLASSIFICADOR FINANCEIRO v4")
+    print("=" * 60)
 
+    grupos = {}
     resultados = []
-    for ex in exemplos:
-        eventos = testar_exemplo(ex["nome"], ex["texto"])
-        resultados.append({
-            "nome": ex["nome"],
-            "n": len(eventos),
-            "tipos": [f"{e['tipo']}({','.join(e['dados'].get('tags', []))})" for e in eventos]
-        })
 
-    print("\n" + "=" * 65)
+    for ex in exemplos:
+        grupo = ex.get("grupo", "GERAL")
+        if grupo not in grupos:
+            grupos[grupo] = []
+            print(f"\n{'═' * 60}")
+            print(f"  {grupo}")
+            print(f"{'═' * 60}")
+
+        grupos[grupo].append(ex["nome"])
+        eventos = testar(ex["nome"], ex["texto"], grupo)
+        tipos = [
+            f"{e['tipo']}"
+            + (f"({','.join(e['dados'].get('tags',[]))})" if e['dados'].get('tags') else "")
+            + (" [G]" if e['dados'].get('fonte') == 'gemini' else "")
+            for e in eventos
+        ]
+        resultados.append((ex["nome"], len(eventos), tipos))
+
+    print("\n\n" + "=" * 60)
     print("📊 RESUMO")
-    print("=" * 65)
-    for r in resultados:
-        print(f"  • {r['nome']}: {r['n']} evento(s) → {', '.join(r['tipos'])}")
+    print("=" * 60)
+    for nome, n, tipos in resultados:
+        print(f"  {nome}: {n} evento(s) → {', '.join(tipos)}")
     print()
 
 

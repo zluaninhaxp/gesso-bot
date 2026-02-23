@@ -1,3 +1,19 @@
+"""
+core/sheets.py — Integração com Google Sheets para o GessoBot.
+
+Estrutura da planilha:
+  Aba "Receitas"          → toda entrada de dinheiro
+  Aba "Despesas Serviço"  → gastos ligados ao negócio
+  Aba "Despesas Pessoal"  → gastos da vida pessoal
+  Aba "Não Classificado"  → eventos que precisam revisão manual
+
+Cada aba tem colunas:
+  Data/Hora | Dia Semana | Tipo | Tags | Valor (R$) | Cliente |
+  Descrição | Frase Original | Aviso
+
+Autenticação: Service Account (JSON key definido em .env).
+"""
+
 import re
 import logging
 from datetime import datetime
