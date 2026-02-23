@@ -1,21 +1,15 @@
-# Ambiente virtual
 venv/
-
-# Variáveis de ambiente
 .env
-
-# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Sistema
 .DS_Store
 Thumbs.db
 
-# Arquivos de editor
 .cursorrules
 agent_docs/
 docs/
 AGENTS.md
+credentials.json
